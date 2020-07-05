@@ -1,0 +1,540 @@
+---
+title: "4i Challenge"
+author: "André Luís Menegatti"
+date: "7/6/2020"
+output:
+  prettydoc::html_pretty:
+    theme: cayman
+    highlight: github
+---
+
+Loading required packages:
+```{r, message=FALSE}
+library(magrittr)
+library(tidyverse)
+library(plotly)
+```
+
+For prettier plots using ``ggplot2``, let's use a custom theme:
+```{r}
+custom_theme <- function() {
+  theme_bw() +
+    theme(panel.grid = element_blank(),
+          plot.caption = element_text(hjust = 0),
+          text = element_text(family = 'serif'),
+          plot.title = element_text(face = 'bold'),
+          axis.title = element_text(face = 'bold'))
+}
+
+theme_set(custom_theme())
+```
+
+# Case 1
+
+Reading the dataset from the csv file:
+```{r, message=FALSE}
+tfp <- read_csv('TFP.csv')
+```
+
+### 1. Make an exploratory data analysis
+
+Inspecting the dataset:
+```{r}
+glimpse(tfp)
+```
+
+The ``summary`` function shows that the feature ``year`` range from 1950 to 2011 and ``rtfpna`` ranges from 0.61 to 1.38.
+```{r}
+summary(tfp)
+```
+
+It is also important to check for missing values. The ``naniar`` package provides some useful functions for spotting and handling missingness. The plot below shows that missing data is not an issue in the ``TFP`` dataset.
+```{r}
+naniar::vis_miss(tfp)
+```
+
+In order to follow the DRY (*Don't Repeat Yourself*) programming principle, let's define a function for making lineplots with the ``TFP`` dataset.
+```{r}
+lineplot_tfp <- function(df, x, y,
+                         title = 'Evolution of TFP',
+                         subtitle = 'USA, Canada, Mexico - 1950 to 2011',
+                         plotly=FALSE) {
+  
+  x = enquo(x)
+  y = enquo(y)
+  
+  plot <- ggplot(df) +
+    geom_line(aes(y = !! y, x = !! x, col = isocode),
+              alpha = .5, size = 1) +
+    scale_color_brewer(name = 'Country', palette = 'Dark2') +
+    scale_x_continuous(breaks = seq(1950, 2010, by = 10)) +
+    labs(
+      x = 'Year', y = 'TFP',
+      title = title,
+      subtitle = subtitle
+    )
+  
+  if (plotly) plot <- ggplotly(plot)
+  
+  plot
+  
+}
+
+lineplot_tfp(df = tfp, x = year, y = rtfpna, plotly=TRUE)
+```
+
+The plot above shows that TFP increased somewhat steadily in the US between 1950 and 2011, while in Mexico it increased until the 1970s and decreased afterwards. The Canadian TFP remained fairly stable.
+
+Now let's create three new features by normalizing TFP to 1955 values, and by computing first differences and percentage changes.
+```{r}
+tfp <- tfp %>%
+  arrange(year) %>% 
+  group_by(isocode) %>% 
+  mutate(diff1 = c(NA_real_, diff(rtfpna)),
+         pct_change = diff1 / lag(rtfpna) * 100,
+         norm = rtfpna / first(rtfpna)) %>% 
+  ungroup()
+```
+
+Now we can use the ``linfeplot_tfp`` function to plot the new features:
+```{r}
+ggplotly(lineplot_tfp(df = tfp, x = year, y = norm) +
+  labs(y = 'TFP (relative to 1955)'))
+```
+
+
+```{r}
+ggplotly(tfp %>% 
+  filter(!is.na(pct_change)) %>% 
+  lineplot_tfp(x = year, y = pct_change) +
+  labs(y = 'Percentage change in TFP') +
+  facet_wrap(~ isocode, nrow = 3, scales = 'free_y') +
+  guides(col = FALSE))
+```
+
+### 2. Forecast 10 years of the series (if you are performing the exercise in R, use package “forecast”).
+
+### 3. Check in the following link pages 2 and 3: https://cran.r-project.org/web/packages/pwt8/pwt8.pdf to see a list of all variables in the original dataset. Can you think about another feature that could be helpful in explaining TFP series? Explain.
+
+# Case 2
+
+Reading the dataset and taking a first look at its variables:
+```{r, message=FALSE}
+comex <- read_csv('data_comexstat.csv')
+glimpse(comex)
+```
+
+It will be useful to have separate variables corresponding to the year and month from the ``date`` variable. Let's create such features using the ``lubridate`` package:
+```{r}
+comex <- comex %>% 
+  mutate(year = lubridate::year(date),
+         month = lubridate::month(date, label = TRUE))
+```
+
+For prettier feature and product names in plots and tables, let's remove underscores and capitalize the first letter.
+```{r}
+names(comex) <- names(comex) %>% Hmisc::capitalize()
+
+comex <- comex %>% 
+  mutate(Product = str_replace(Product, '_', ' ') %>% 
+           Hmisc::capitalize()) %>% 
+  rename(USD = Usd)
+
+
+```
+
+### 1. Show the evolution of total monthly and total annual exports from Brazil (all states and to everywhere) of ‘soybeans’, ‘soybean oil’ and ‘soybean meal.
+Filtering the dataframe and using prettier ``product`` names:
+```{r}
+comex_soy <- comex %>% 
+  filter(Product %in% c('Soybeans', 'Soybean oil', 'Soybean meal'))
+```
+
+The plots below show the evolution of total yearly exports for the selected produts, both in terms of volume (millions of tons) and value (billions of US dollars). We can see a that soybeans exports increases substantially since early 2000s, while the exports for the other two products remained fairly stable. In addition, we notice that both plots look reasonably similar to one another - in spite of some change in relative prices of soybean oil and soybean meal after 2007.
+```{r}
+comex_soy_yearly <- comex_soy %>% 
+  group_by(Product, Year) %>% 
+  summarise(Tons = sum(Tons),
+            USD = sum(USD)) %>% 
+  ungroup() %>% 
+  pivot_longer(cols = c(Tons, USD),
+               names_to = 'Variable', values_to = 'Value') %>% 
+  mutate(Value = ifelse(Variable == 'Tons', Value / 1e+6, Value / 1e+9),
+         Variable = ifelse(Variable == 'Tons', 'Millions of tons', 'Billions of USD'))
+
+ggplotly(
+  ggplot(comex_soy_yearly) +
+  geom_line(aes(x = Year, y = Value, col = Product),
+            size = 1, alpha = .5) +
+  scale_color_brewer(palette = 'Dark2') +
+  facet_wrap(~Variable, scales = 'free_y') +
+  labs(y = '', title = 'Evolution of soybean products exports')
+)
+```
+
+Looking at monthly data, we notice that soybeans exports show a clear seasonal pattern:
+```{r}
+ggplotly(
+  comex_soy %>% 
+    mutate(`Thousands of tons` = Tons / 1e+3) %>% 
+    ggplot() +
+    geom_line(aes( x = Date, y = `Thousands of tons`, col = Product)) +
+    facet_wrap(~ Product, nrow = 3, scales = 'free_y') +
+    labs(x = 'Date (monthly)',
+         title = 'Evolution of soybean products exports',
+         subtitle = 'Monthly exported volume, from 1997 to 2019') +
+    guides(col = FALSE)
+  )
+```
+
+We can further investigate the seasonality in soybeans exports using the ``month`` variable we created above. The plot below shows the average exports by month. We can see exports are higher between March and May, decreasing smoothly in the following months. This is explained by the harvest season.
+```{r}
+ggplotly(
+  comex_soy %>%
+    filter(Product == 'Soybeans') %>% 
+    group_by(Month) %>%
+    summarise(`Avg monthly exports` = mean(Tons) / 1e+3) %>% 
+    ungroup() %>% 
+    ggplot() +
+    geom_col(aes(x = Month, y = `Avg monthly exports`), fill = 'steelblue') +
+    labs(x = 'Month', y = 'Thousands of tons',
+         title = 'Seasonality in soybeans exports',
+         subtitle = 'Average exported volume by month, from 1997 to 2019')
+  )
+```
+
+### 2. What are the 3 most important products exported by Brazil in the last 5 years?
+
+Filtering the last 5 years and computing total exported volume and value for each product:
+```{r}
+last5_years <- comex %>% 
+  filter(Year >= 2015) %>% 
+  group_by(Product) %>% 
+  summarise(
+    Tons = sum(Tons),
+    USD = sum(USD)
+  ) %>% 
+  ungroup()
+```
+
+The table below shows the 3 most important products exported by Brazil in terms of total value:
+```{r}
+last5_years %>% 
+  arrange(desc(USD)) %>% 
+  slice(1:3) %>% 
+  mutate_if(is.numeric, function(x) x / 1e+6) %>% 
+  knitr::kable(
+    digits = 2,
+    col.names = c('Product', 'Tons (millions)', 'USD (millions)')
+    )
+```
+
+According to our best understanding, total exported value is better than total exported volume if one wants to identify the most important products. Nevertheless, for the sake of completeness, the table below shows the most important products selected by total amount of tons exported. We can see that soybean meal is no longer in the table, which now includes corn along soybeans and sugar.
+```{r}
+last5_years %>% 
+  arrange(desc(Tons)) %>% 
+  slice(1:3) %>% 
+  mutate_if(is.numeric, function(x) x / 1e+6) %>% 
+  knitr::kable(
+    digits = 2,
+    col.names = c('Product', 'Tons (millions)', 'USD (millions)')
+    )
+```
+
+Going back to the total value exported, the plot below shows each product' share of the total exports (considering only the products provided in the dataset):
+```{r}
+ggplotly(
+  comex %>% 
+    filter(Year >= 2015) %>% 
+    group_by(Product, Year) %>% 
+    summarise(`Billions of USD` = sum(USD) / 1e+9) %>% 
+    ungroup() %>% 
+    mutate(Product = fct_reorder(Product, `Billions of USD`, sum)) %>%
+    ggplot() +
+    geom_col(aes(x = Year, y = `Billions of USD`, fill = Product),
+             position = 'fill', col = 'gray20') +
+    scale_fill_brewer(palette = 'Spectral') +
+    labs(y = 'Share of exports',
+         title = 'Distribution of exports across selected products',
+         subtitle = 'Yearly share of total exported value, from 2015 to 2019')
+)
+```
+
+### 3. What are the main routes through which Brazil have been exporting ‘corn’ in the last few years? Are there differences in the relative importance of routes depending on the product?
+
+```{r}
+routes <- comex %>% 
+  group_by(Product, Year, Route) %>% 
+  summarise(Tons = sum(Tons)) %>% 
+  ungroup() %>% 
+  group_by(Product, Year) %>% 
+  mutate(Share = Tons / sum(Tons) * 100) %>% 
+  arrange(desc(Share)) %>% 
+  ungroup()
+
+routes %>%
+  filter(Product == 'Corn', Year > 2016) %>% 
+  select(-Tons, -Product) %>% 
+  group_by(Year) %>% 
+  slice(1:3) %>% 
+  knitr::kable(digits = 2)
+```
+
+The table above shows that sea is by far the most used route in Brazil for exporting corn. But the table alone is not very informative. Let's build a plot to see the importance of different routes for corn exports across the years:
+```{r}
+ggplotly(
+    routes %>% 
+      filter(Product == 'Corn') %>% 
+      mutate(`Millions of tons` = Tons / 1e+6) %>% 
+      ggplot() +
+      geom_col(aes(
+        x = Year, y = `Millions of tons`, fill = Route
+      ), position = 'fill', col = 'gray25') +
+      labs(y = 'Share of total exported volume',
+           title = 'Distribution of corn exports across different routes') +
+      scale_fill_manual(values = c('azure', 'chocolate3',
+                                   'gold', 'aquamarine', 'darkblue'))
+)
+```
+
+The figure below shows plots similar to the last one for every product in the dataset. We can see that "Sea" has been the most important route for most of the other products as well. The sole exception is wheat between 2005 and 2011: during this period, the main route for this product was "Ground".
+```{r}
+routes %>% 
+  ggplot() +
+  geom_col(aes(
+    x = Year, y = Tons, fill = Route
+  ), position = 'fill', col = 'gray25') +
+  labs(x = 'Year', y = 'Share of total exported volume') +
+  scale_fill_manual(
+    name = 'Route',
+    values = c('azure', 'chocolate3', 'gold', 'aquamarine', 'darkblue')) +
+  facet_wrap(~ Product) +
+  theme(legend.position = 'bottom')
+  
+```
+
+The sudden change in route usage for wheat exports deserves further investigation. Drawing a barplot that shows the total exported volume over the years (instead of the shares for each route), we can actually see that wheat exports were minimal until 2012 - precisely when sea became the main export route.
+```{r}
+ggplotly(
+    routes %>% 
+      filter(Product == 'Wheat') %>% 
+      mutate(`Millions of tons` = Tons / 1e+6) %>% 
+      ggplot() +
+      geom_col(aes(
+        x = Year, y = `Millions of tons`, fill = Route
+      ),  col = 'gray25') +
+      labs(y = 'Millions of tons',
+           title = 'Distribution of wheat exports across different routes') +
+      scale_fill_manual(values = c('azure', 'chocolate3',
+                                   'gold', 'aquamarine', 'darkblue'))
+)
+```
+
+### 4. Which countries have been the most important trade partners for Brazil in terms of ‘corn’ and ‘sugar’ in the last 3 years?
+The table below shows the top-5 destinations of Brazilian corn and sugar in the last 3 years (2016 to 2019).
+```{r}
+n_countries <- 5
+selected_products <- c('Sugar', 'Corn')
+
+comex %>% 
+  filter(Year > 2016,
+         Product %in% selected_products) %>% 
+  group_by(Product, Country) %>% 
+  summarise(USD = sum(USD) / 1e+6 / n_countries,
+            Tons = sum(Tons) / 1e+6 / n_countries) %>% 
+  group_by(Product) %>% 
+  mutate(Rank = dense_rank(desc(USD)),
+         Share = Tons / sum(Tons)) %>% 
+  arrange(desc(USD)) %>% 
+  slice(1:n_countries) %>% 
+  ungroup() %>% 
+  select(Product, Rank, Country, USD, Tons, Share) %>% 
+  knitr::kable(
+    digits = 2,
+    col.names = c('Product', 'Rank', 'Country', 'Avg value per year (millions of USD)', 'Avg volume per year (millions of tons)', 'Share of product exports (2016-2019)'),
+    caption = 'Brazilian exports of corn and sugar - Average yearly exports to most important trade partners - 2016 to 2019'
+    )
+```
+
+It is important to notice that the table above shows the top-5 importers of each product considering the sum of countries' imports across the last 3 years. Thus, it is possible that other countries rank top-5 in a particular year. The code below identifies all countries that ranked top-5 in Brazilian imports of sugar or corn, in any year between 2016 and 2019. This list will be useful for drawing some plots later on.
+```{r}
+top_importers <- comex %>% 
+  filter(Year > 2016,
+         Product %in% selected_products) %>% 
+  group_by(Product, Country, Year) %>% 
+  summarise(USD = sum(USD),
+            Tons = sum(Tons)) %>% 
+  group_by(Product, Year) %>% 
+  arrange(desc(USD)) %>%
+  slice(1:5) %>% 
+  ungroup() %>% 
+  select(Product, Country) %>% 
+  distinct()
+
+# List with unique top importers for each year between 2016 and 2019
+top_importers_list <- selected_products %>% 
+  map(.f = ~ top_importers %>% 
+        filter(Product == .x) %>% 
+        pull(Country)) %>% 
+  set_names(selected_products)
+
+print(top_importers_list)
+
+```
+
+The code below draws interactive plots showing how much each of these countries imported of sugar or corn, compared to total Brazilian exports of such products, from 1997 to 2019.
+```{r}
+df_plot <- comex %>% 
+  filter(Product %in% selected_products) %>% 
+  mutate(Country = case_when(
+    Product == 'Sugar' & Country %in% top_importers_list$Sugar ~ Country,
+    Product == 'Corn' & Country %in% top_importers_list$Corn ~ Country,
+    TRUE ~ 'Others'
+  )) %>% 
+  group_by(Year, Country, Product) %>% 
+  summarise(Tons = sum(Tons)) %>%
+  group_by(Product, Year) %>%
+  mutate(Share = Tons / sum(Tons)) %>%
+  ungroup()
+
+top_importers_plots <- selected_products %>% 
+  map(.f = ~ ggplotly(
+    df_plot %>% 
+      filter(Product == .x) %>% 
+      ggplot(aes(x = Year, y = Tons, fill = Country,
+                 text = str_c(
+                   '<br>', '<b>Year:</b> ', Year,
+                  '<br>', '<b>Country:</b> ', Country,
+                  '<br>', '<b>Millions of tons:</b> ', round((Tons / 1e+6), 2),
+                  '<br>', '<b>Share:</b> ', round(Share, 2)
+                  ))) +
+      geom_col(col = 'gray40', position = 'fill') +
+      scale_fill_brewer(palette = 'Set3') +
+      labs(
+        y = 'Share',
+        title = str_c('Exports of Brazilian ', .x, ' by destination')),
+    tooltip = 'text'
+    )) %>% 
+  set_names(selected_products)
+```
+
+The plot showing the distribution of corn exports by destination is stored in the list ``top_importers_plots`` and we can see it by typing:
+```{r}
+top_importers_plots$Corn
+```
+
+The same for the plot showing sugar exports:
+```{r}
+top_importers_plots$Sugar
+```
+
+### 5. For each of the products in the dataset, show the 5 most important states in terms of exports.
+
+In order to identify the most important states in terms of exports, we will use each state's total exported volume over the last 5 years. Using this strategy, we can built the table below, which shows detailed data for selected states, for each of the products:
+```{r}
+n_years = 5
+
+state_rank <- comex %>% 
+  filter(Year > (2019 - n_years)) %>% 
+  group_by(Product, State) %>% 
+  summarise(USD = sum(USD) / 1e+6,
+            Tons = sum(Tons) / 1e+6,
+            Avg_usd = USD / n_years,
+            Avg_tons = Tons / n_years) %>% 
+  ungroup() %>% 
+  group_by(Product) %>% 
+  mutate(Share = Tons / sum(Tons),
+         Rank = dense_rank(desc(Share))) %>% 
+  arrange(Rank) %>% 
+  ungroup() %>% 
+  select(Product, Rank, State, Share, Tons, Avg_tons, USD, Avg_usd)
+
+top_states <- state_rank %>%
+  group_by(Product) %>% 
+  slice(1:5) %>% 
+  ungroup()
+
+top_states %>% 
+  knitr::kable(
+    digits = 2,
+    col.names = 
+      c('Product', 'Rank', 'State',
+        'Share of total product exports (2015-2019)',
+        'Tons (millions, 2015-2019)',
+        'Avg tons per year (millions)',
+        'USD (millions, 2015-2019)',
+        'Avg USD per year (millions)',
+        )
+    )
+```
+
+```{r}
+top_states_list <- unique(comex$Product) %>% 
+  map(.f = ~ top_states %>% 
+        filter(Product == .x) %>% 
+        pull(State)) %>% 
+  set_names(unique(comex$Product))
+```
+
+```{r}
+df_plot_state <- comex %>% 
+  split(f = .$Product) %>% 
+  map2(.y = top_states_list,
+       .f = ~ .x %>% 
+         mutate(State = ifelse(State %in% .y,
+                               State, 'Others'))) %>% 
+  bind_rows()
+```
+
+```{r, warning=FALSE, message=FALSE}
+top_states_plots <- unique(comex$Product) %>% 
+  map(.f = ~ ggplotly(
+    df_plot_state %>% 
+      filter(Product == .x) %>% 
+      group_by(Year, State) %>% 
+      summarise(USD = sum(USD) / 1e+6,
+                Tons = sum(Tons) / 1e+6) %>% 
+      group_by(Year) %>% 
+      mutate(Share = Tons / sum(Tons)) %>% 
+      ungroup() %>% 
+      ggplot() +
+      geom_col(aes(x = Year, y = Tons, fill = State,
+                   text = str_c(
+                   '<br>', '<b>Year:</b> ', Year,
+                  '<br>', '<b>State:</b> ', State,
+                  '<br>', '<b>USD (millions):</b> ', round((USD), 2),
+                  '<br>', '<b>Tons (millions):</b> ', round((Tons), 2),
+                  '<br>', '<b>Share:</b> ', round(Share, 2)
+                  )),
+               col = 'gray50') +
+      scale_fill_brewer(palette = 'Set3') +
+      labs(title = str_c('Evolution of ', tolower(.x), ' exports'),
+           y = 'Tons (millions)'),
+    tooltip = 'text'
+  )) %>% 
+  set_names(unique(comex$Product))
+
+top_states_plots$Corn
+```
+
+```{r}
+top_states_plots$Soybeans
+```
+
+```{r}
+top_states_plots$`Soybean oil`
+```
+
+```{r}
+top_states_plots$`Soybean meal`
+```
+
+```{r}
+top_states_plots$Sugar
+```
+
+```{r}
+top_states_plots$Wheat
+```
+
+### 6. Now, we ask you to show your modelling skills. Feel free to use any type of modelling approach, but bear in mind that the modelling approach depends on the nature of your data, and so different models yield different estimates and forecasts. To help you out in this task we also provide you with a dataset of possible covariates (.xlsx). They all come from public sources (IMF, World Bank) and are presented in index number format. Question: What should be the total brazilian soybeans, soybean_meal, and corn export forecasts, in tons, for the next 11 years (2020-2030)? We’re mostly interested in the annual forecast.

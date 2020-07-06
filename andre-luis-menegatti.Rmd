@@ -1,5 +1,5 @@
 ---
-title: "4i Challenge"
+title: "Data Analysis Skill Test"
 author: "André Luís Menegatti"
 date: "7/6/2020"
 output:
@@ -10,9 +10,10 @@ output:
 
 Loading required packages:
 ```{r, message=FALSE}
-library(magrittr)
 library(tidyverse)
 library(plotly)
+library(forecast)
+library(xts)
 ```
 
 For prettier plots using ``ggplot2``, let's use a custom theme:
@@ -38,7 +39,7 @@ tfp <- read_csv('TFP.csv')
 
 ### 1. Make an exploratory data analysis
 
-Inspecting the dataset:
+By inspecting the dataset using the ``glimpse`` function, we see that it has 186 observations and 3 variables.
 ```{r}
 glimpse(tfp)
 ```
@@ -48,44 +49,19 @@ The ``summary`` function shows that the feature ``year`` range from 1950 to 2011
 summary(tfp)
 ```
 
-It is also important to check for missing values. The ``naniar`` package provides some useful functions for spotting and handling missingness. The plot below shows that missing data is not an issue in the ``TFP`` dataset.
+There are 62 observations for each country, one for every year between 1950 and 2011:
+```{r}
+tfp %>% 
+  count(isocode) %>% 
+  knitr::kable()
+```
+
+Now that we know the structure of the dataset, it is important to check for missing values. The ``naniar`` package provides some useful functions for spotting and handling missingness. The plot below shows that missing data is not an issue in the ``TFP`` dataset.
 ```{r}
 naniar::vis_miss(tfp)
 ```
 
-In order to follow the DRY (*Don't Repeat Yourself*) programming principle, let's define a function for making lineplots with the ``TFP`` dataset.
-```{r}
-lineplot_tfp <- function(df, x, y,
-                         title = 'Evolution of TFP',
-                         subtitle = 'USA, Canada, Mexico - 1950 to 2011',
-                         plotly=FALSE) {
-  
-  x = enquo(x)
-  y = enquo(y)
-  
-  plot <- ggplot(df) +
-    geom_line(aes(y = !! y, x = !! x, col = isocode),
-              alpha = .5, size = 1) +
-    scale_color_brewer(name = 'Country', palette = 'Dark2') +
-    scale_x_continuous(breaks = seq(1950, 2010, by = 10)) +
-    labs(
-      x = 'Year', y = 'TFP',
-      title = title,
-      subtitle = subtitle
-    )
-  
-  if (plotly) plot <- ggplotly(plot)
-  
-  plot
-  
-}
-
-lineplot_tfp(df = tfp, x = year, y = rtfpna, plotly=TRUE)
-```
-
-The plot above shows that TFP increased somewhat steadily in the US between 1950 and 2011, while in Mexico it increased until the 1970s and decreased afterwards. The Canadian TFP remained fairly stable.
-
-Now let's create three new features by normalizing TFP to 1955 values, and by computing first differences and percentage changes.
+Before moving up to data visualization, let's create three new features by normalizing TFP to 1955 values, computing first differences and computing percentage changes:
 ```{r}
 tfp <- tfp %>%
   arrange(year) %>% 
@@ -96,23 +72,124 @@ tfp <- tfp %>%
   ungroup()
 ```
 
-Now we can use the ``linfeplot_tfp`` function to plot the new features:
+Since the dataset contains TFP series for three countries, a lineplot is the most obvious way to visualize the data. In order to follow the DRY (*Don't Repeat Yourself*) programming principle, we will define a function for making lineplots with the ``TFP`` dataset.
 ```{r}
-ggplotly(lineplot_tfp(df = tfp, x = year, y = norm) +
-  labs(y = 'TFP (relative to 1955)'))
+lineplot_tfp <- function(df, y,
+                         title='',
+                         subtitle='',
+                         ylab=NA,
+                         plotly=FALSE) {
+  
+  y = enquo(y)
+  
+  df_plot <- df %>% 
+  mutate(`Year` = year,
+         `Country` = isocode,
+         TFP = rtfpna,
+         `Norm. TFP (1955)` = norm,
+         `1st diff` = diff1,
+         `Pct change (%)` = pct_change) %>% 
+  mutate_if(is.numeric, round, digits = 3)
+  
+  plot <- df_plot %>% 
+    ggplot(aes(y = !!y, x = Year, col = Country, shape = Country,
+               `TFP` = TFP, `Norm. TFP (1955)` = `Norm. TFP (1955)`,
+               `1st diff` = `1st diff`, `Pct change (%)` = `Pct change (%)`)) +
+    geom_line(alpha = .3) +
+    geom_point(alpha = .5) +
+    scale_color_brewer(palette = 'Dark2') +
+    scale_x_continuous(breaks = seq(1950, 2010, by = 10)) +
+    labs(title = title, subtitle = subtitle) +
+    guides(shape = FALSE)
+  
+  if (!is.na(ylab) & is.character(ylab)) {
+    plot <- plot + ylab(ylab)
+  }
+  
+  if (plotly) {
+    plot <- ggplotly(
+      plot, tooltip = c('Year', 'TFP',
+                        'Norm. TFP (1955)', '1st diff', 'Pct change (%)')
+      )
+  }
+  
+  plot
+}
 ```
 
+Now we can use our custom function to draw a simple interactive lineplot showing the evolution of TFP across the years:
+```{r}
+lineplot_tfp(df = tfp, y = rtfpna, title = 'Evolution of TFP - 1955 to 2011',
+             ylab = 'TFP', plotly=TRUE)
+```
 
+The plot above shows that TFP increased somewhat steadily in the US between 1950 and 2011, while in Mexico it increased until the 1970s and decreased afterwards. The Canadian TFP remained fairly stable.
+
+We can also use the ``linfeplot_tfp`` function to plot the features we created. The evolution of TFP normalized to 1955 values makes the steady increase in American TFP even clearer.
+```{r}
+lineplot_tfp(df = tfp, y = norm, title = 'Evolution of TFP, normalized to 1955 values - 1955 to 2011',
+             ylab = 'Normalized TFP (1955)', plotly=TRUE)
+```
+
+In order to prevent overplotting, we will plot each country's percentage changes in TFP separately. This will require a few additional steps besides calling ``lineplot_tfp``.
 ```{r}
 ggplotly(tfp %>% 
   filter(!is.na(pct_change)) %>% 
-  lineplot_tfp(x = year, y = pct_change) +
-  labs(y = 'Percentage change in TFP') +
-  facet_wrap(~ isocode, nrow = 3, scales = 'free_y') +
-  guides(col = FALSE))
+  lineplot_tfp(y = pct_change, ylab = 'Pct. change (%)',
+               title = 'Evolution of TFP - Percentage change relative to previous year') +
+  geom_hline(yintercept = 0, col = 'darkred', linetype = 'dotted', alpha =.5) +
+  facet_wrap(~ isocode, nrow = 3) +
+  guides(col = FALSE),
+  tooltip = c('Year', 'TFP', 'Norm. TFP (1955)',
+               '1st diff', 'Pct change (%)'))
 ```
 
 ### 2. Forecast 10 years of the series (if you are performing the exercise in R, use package “forecast”).
+
+The ``forecast`` package expects time-series objects, so we will build a list containing the TFP series for each country as separate ``xts`` objects.:
+```{r}
+ts_list <- tfp %>% 
+  split(.$isocode) %>% 
+  map(~ xts(.x$rtfpna,
+      order.by = lubridate::as_date(str_c(.x$year, '-01-01')))) %>% 
+  set_names(c('CAN', 'MEX', 'USA'))
+```
+
+To keep things simple, we will use the function ``auto.arima`` from the ``forecast`` package. This function selects the appropriate **autoregressive integrated moving average (ARIMA)** model given the time series at hand.  
+```{r}
+arima_models <- ts_list %>% 
+  map(.f = ~ auto.arima(.x)) %>% 
+  set_names(names(ts_list))
+```
+
+Now we can draw plots showing the forecast of the most appropriate ARIMA model for each time series. The code below draws all the plots at once using the ``purr`` function and stores them in a list called ``forecast_plots``. At the end, it also shows the plot for the USA.
+```{r, message=FALSE}
+forecast_plots <- c('MEX', 'USA', 'CAN') %>% 
+  map(.f = ~ arima_models[[.x]] %>% 
+   forecast(h = 10) %>% 
+   autoplot() +
+   scale_x_continuous(
+     name = 'Year',
+     breaks = seq(0, 80, by = 10),
+     labels = function(x) x + 1950
+     ) +
+   labs(
+     subtitle = str_c('10-year TFP forecast - ', .x),
+     y = 'TFP'
+     )
+  ) %>% set_names(c('MEX', 'USA', 'CAN'))
+
+forecast_plots$USA
+```
+
+For completeness, the plots for Mexico and Canada are presented below:
+```{r}
+forecast_plots$MEX
+```
+
+```{r}
+forecast_plots$CAN
+```
 
 ### 3. Check in the following link pages 2 and 3: https://cran.r-project.org/web/packages/pwt8/pwt8.pdf to see a list of all variables in the original dataset. Can you think about another feature that could be helpful in explaining TFP series? Explain.
 
@@ -454,20 +531,15 @@ top_states <- state_rank %>%
   slice(1:5) %>% 
   ungroup()
 
-top_states %>% 
-  knitr::kable(
-    digits = 2,
-    col.names = 
-      c('Product', 'Rank', 'State',
-        'Share of total product exports (2015-2019)',
-        'Tons (millions, 2015-2019)',
-        'Avg tons per year (millions)',
-        'USD (millions, 2015-2019)',
-        'Avg USD per year (millions)',
-        )
-    )
+top_states %>%
+  rename(`Tons (millions, 2015-2019` = Tons,
+         `USD (millions, 2015-2019)` = USD,
+         `Avg tons per year (millions)` = Avg_tons,
+         `Avg USD per year (millions)` = Avg_usd) %>% 
+  knitr::kable(digits = 2)
 ```
 
+For a more detailed analysis, we will build barplots showing the evolution of each product's exports over the years. The barplots will also depict the contribution of the 5 most important states mentioned in the previos table. As a first step towards building these plots, the code below builds a named list with the names of the top 5 states for each product.
 ```{r}
 top_states_list <- unique(comex$Product) %>% 
   map(.f = ~ top_states %>% 
@@ -476,6 +548,7 @@ top_states_list <- unique(comex$Product) %>%
   set_names(unique(comex$Product))
 ```
 
+Now we can use the information on ``top_states_list`` to modify the ``comex``` dataframe so that the variable ``Product`` identifies only the 5 most important states with respect to each product exports. All the other states are labeled as ``"Others"``.
 ```{r}
 df_plot_state <- comex %>% 
   split(f = .$Product) %>% 
@@ -486,6 +559,7 @@ df_plot_state <- comex %>%
   bind_rows()
 ```
 
+With the modified dataframe, we can use the ``map`` function to draw all the plots at once and store them in a named list. At the end of the following code chunk we also show the plot concerning corn exports.
 ```{r, warning=FALSE, message=FALSE}
 top_states_plots <- unique(comex$Product) %>% 
   map(.f = ~ ggplotly(
@@ -517,6 +591,7 @@ top_states_plots <- unique(comex$Product) %>%
 top_states_plots$Corn
 ```
 
+For completeness, the remaining plots are shown below.
 ```{r}
 top_states_plots$Soybeans
 ```

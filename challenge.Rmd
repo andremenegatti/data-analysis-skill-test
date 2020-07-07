@@ -8,9 +8,6 @@ output:
     lightbox: true
     gallery: false
     highlight: tango
-  # prettydoc::html_pretty:
-  #   theme: cayman
-  #   highlight: github
 ---
 
 # Environment setup
